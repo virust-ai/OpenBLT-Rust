@@ -1,0 +1,21 @@
+[package]
+name = "openblt"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "OpenBLT bootloader implementation in Rust for NXP S32K series"
+license = "GPL-3.0"
+
+[dependencies]
+s32k118-hal = { path = "../s32k118-hal" }
+s32k148-hal = { path = "../s32k148-hal" }
+embedded-can = { workspace = true }
+bitflags = { workspace = true }
+nb = { workspace = true }
+log = { workspace = true }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.5.1" 
