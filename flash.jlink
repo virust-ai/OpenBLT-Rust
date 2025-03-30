@@ -1,0 +1,6 @@
+r
+h
+loadfile openblt.bin 0x00000000
+r
+g
+q 

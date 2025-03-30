@@ -254,6 +254,36 @@ impl CanRegisters {
         let new_value = f(value);
         self.write(new_value);
     }
+
+    pub fn init_can(&self) -> Result<(), ()> {
+        unsafe {
+            // Enter freeze mode
+            let ctrl1 = self.ctrl1.get();
+            self.ctrl1.set(ctrl1 & !Ctrl1::CAN_EN.bits());
+            self.ctrl1.set(ctrl1 | (Ctrl1::HALT.bits() | Ctrl1::FRZ.bits()));
+            
+            // Configure bit timing for 500kbps at 80MHz clock:
+            // Prescaler = 4, Prop_Seg = 7, Phase_Seg1 = 4, Phase_Seg2 = 4, RJW = 4
+            let timing = BitTiming::PRESDIV.bits() & (3 << 16) |
+                        BitTiming::PROPSEG.bits() & (6 << 0) |
+                        BitTiming::PSEG1.bits() & (3 << 3) |
+                        BitTiming::PSEG2.bits() & (3 << 6) |
+                        BitTiming::RJW.bits() & (3 << 9);
+            self.btr.set(timing);
+
+            // Configure message buffers
+            for i in 0..16 {
+                self.mb[i].cs.set(0); // Inactive
+            }
+            
+            // Exit freeze mode and enable CAN
+            let ctrl1 = self.ctrl1.get();
+            self.ctrl1.set(ctrl1 | Ctrl1::CAN_EN.bits());
+            self.ctrl1.set(ctrl1 & !(Ctrl1::HALT.bits() | Ctrl1::FRZ.bits()));
+        }
+        
+        Ok(())
+    }
 }
 
 impl Default for MessageBuffer {
