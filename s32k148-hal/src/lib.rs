@@ -1,8 +1,7 @@
 #![no_std]
 
 use cortex_m::interrupt::free;
-use embedded_can::nb::Can;
-use embedded_can::Frame;
+use embedded_can::{Can, ExtendedId, Frame, Id, StandardId};
 use nb;
 use thiserror::Error;
 
@@ -19,12 +18,80 @@ pub enum Error {
     ConfigError,
 }
 
+impl embedded_can::Error for Error {
+    fn kind(&self) -> embedded_can::ErrorKind {
+        match self {
+            Error::CanError(_) => embedded_can::ErrorKind::Other,
+            Error::InitError => embedded_can::ErrorKind::Other,
+            Error::ConfigError => embedded_can::ErrorKind::Other,
+        }
+    }
+}
+
 pub struct S32K148Hal {
     can: S32K148Can,
 }
 
 struct S32K148Can {
     registers: &'static mut CanRegisters,
+}
+
+// Custom CAN frame implementation for S32K148
+#[derive(Debug, Clone, Copy)]
+pub struct S32K148Frame {
+    id: Id,
+    data: [u8; 8],
+    dlc: u8,
+    is_remote: bool,
+}
+
+impl Frame for S32K148Frame {
+    fn new(id: impl Into<Id>, data: &[u8]) -> Option<Self> {
+        let id = id.into();
+        let mut frame_data = [0u8; 8];
+        let len = data.len().min(8);
+        frame_data[..len].copy_from_slice(&data[..len]);
+
+        Some(S32K148Frame {
+            id,
+            data: frame_data,
+            dlc: len as u8,
+            is_remote: false,
+        })
+    }
+
+    fn new_remote(id: impl Into<Id>, dlc: u8) -> Option<Self> {
+        if dlc > 8 {
+            return None;
+        }
+
+        Some(S32K148Frame {
+            id: id.into(),
+            data: [0; 8],
+            dlc,
+            is_remote: true,
+        })
+    }
+
+    fn id(&self) -> Id {
+        self.id
+    }
+
+    fn dlc(&self) -> u8 {
+        self.dlc
+    }
+
+    fn data(&self) -> &[u8] {
+        &self.data[..self.dlc as usize]
+    }
+
+    fn is_extended(&self) -> bool {
+        matches!(self.id, Id::Extended(_))
+    }
+
+    fn is_remote_frame(&self) -> bool {
+        self.is_remote
+    }
 }
 
 impl S32K148Hal {
@@ -93,7 +160,7 @@ impl S32K148Can {
 }
 
 impl Can for S32K148Can {
-    type Frame = Frame;
+    type Frame = S32K148Frame;
     type Error = Error;
 
     fn transmit(&mut self, frame: &Self::Frame) -> nb::Result<Option<Self::Frame>, Self::Error> {
@@ -104,9 +171,34 @@ impl Can for S32K148Can {
                 return Err(nb::Error::WouldBlock);
             }
 
-            // TODO: Implement actual frame transmission
-            // This is a placeholder implementation
-            Ok(None)
+            // Find an available transmit buffer
+            for i in 0..16 {
+                let mb_cs = self.registers.mb[i].cs.read();
+                if (mb_cs & MessageBufferControl::CODE.bits()) == 0 {
+                    // Configure message buffer for transmission
+                    let id = match frame.id() {
+                        Id::Standard(id) => id.as_raw() as u32,
+                        Id::Extended(id) => id.as_raw(),
+                    };
+
+                    self.registers.mb[i].id.write(id);
+                    self.registers.mb[i]
+                        .word0
+                        .write(u32::from_le_bytes(frame.data[0..4].try_into().unwrap()));
+                    self.registers.mb[i]
+                        .word1
+                        .write(u32::from_le_bytes(frame.data[4..8].try_into().unwrap()));
+
+                    // Set up control word for transmission
+                    let cs = MessageBufferControl::CODE.bits() | // Active for transmission
+                            (frame.dlc() as u32) << 16; // Data length code
+                    self.registers.mb[i].cs.write(cs);
+
+                    return Ok(None);
+                }
+            }
+
+            Err(nb::Error::WouldBlock)
         }
     }
 
@@ -118,8 +210,38 @@ impl Can for S32K148Can {
                 return Err(nb::Error::WouldBlock);
             }
 
-            // TODO: Implement actual frame reception
-            // This is a placeholder implementation
+            // Find a received message
+            for i in 0..16 {
+                let mb_cs = self.registers.mb[i].cs.read();
+                if (mb_cs & MessageBufferControl::CODE.bits()) == 0x4 {
+                    // RX_FULL
+                    let id = self.registers.mb[i].id.read();
+                    let dlc = ((mb_cs >> 16) & 0xF) as u8;
+
+                    let word0 = self.registers.mb[i].word0.read();
+                    let word1 = self.registers.mb[i].word1.read();
+
+                    let mut data = [0u8; 8];
+                    data[0..4].copy_from_slice(&word0.to_le_bytes());
+                    data[4..8].copy_from_slice(&word1.to_le_bytes());
+
+                    // Clear the RX_FULL flag
+                    self.registers.mb[i].cs.write(0);
+
+                    // Create frame with appropriate ID type
+                    let frame = if (id & (1 << 30)) != 0 {
+                        S32K148Frame::new(ExtendedId::new(id & 0x1FFFFFFF), &data[..dlc as usize])
+                    } else {
+                        S32K148Frame::new(
+                            StandardId::new((id & 0x7FF) as u16),
+                            &data[..dlc as usize],
+                        )
+                    };
+
+                    return Ok(frame);
+                }
+            }
+
             Err(nb::Error::WouldBlock)
         }
     }
