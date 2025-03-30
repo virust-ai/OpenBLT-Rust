@@ -4,21 +4,29 @@ pub mod s32k118;
 pub mod s32k148;
 
 use embedded_can::Can;
-use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum HalError {
-    #[error("Flash error")]
     FlashError,
-    #[error("CAN error")]
     CanError,
-    #[error("Invalid operation")]
     InvalidOperation,
-    #[error("Programming mode error")]
     ProgrammingModeError,
-    #[error("Jump error")]
     JumpError,
 }
+
+impl core::fmt::Display for HalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HalError::FlashError => write!(f, "Flash error"),
+            HalError::CanError => write!(f, "CAN error"),
+            HalError::InvalidOperation => write!(f, "Invalid operation"),
+            HalError::ProgrammingModeError => write!(f, "Programming mode error"),
+            HalError::JumpError => write!(f, "Jump error"),
+        }
+    }
+}
+
+impl core::error::Error for HalError {}
 
 pub trait S32KHal {
     type Can: Can;

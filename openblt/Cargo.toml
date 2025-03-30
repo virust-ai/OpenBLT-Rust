@@ -15,7 +15,6 @@ nb = { workspace = true }
 log = { workspace = true }
 cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5.1" 

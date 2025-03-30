@@ -11,7 +11,7 @@ cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }
 embedded-can = { workspace = true }
 nb = { workspace = true }
-thiserror = { workspace = true, default-features = false }
 bitflags = { workspace = true }
 volatile-register = "0.2.0"
 vcell = "0.1.3" 
+openblt = { path = "../openblt" }

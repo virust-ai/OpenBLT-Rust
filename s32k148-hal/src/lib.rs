@@ -1,41 +1,303 @@
 #![no_std]
 
 use cortex_m::interrupt::free;
-use embedded_can::{Can, ExtendedId, Frame, Id, StandardId};
+use embedded_can::blocking::Can;
+use embedded_can::{Error as CanError, ExtendedId, Frame, Id, StandardId};
 use nb;
-use thiserror::Error;
+use openblt::hal::HalError;
 
 mod can;
-use can::{BitTiming, CanError, CanRegisters, Ctrl1, MessageBufferControl, Stat1};
+mod hal;
+use can::{BitTiming, CanError as S32KCanError, CanRegisters, Ctrl1, MessageBufferControl, Stat1};
+use hal::S32KHal;
 
 pub mod flash;
+use flash::{Flash, FlashError};
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("CAN communication error: {0}")]
-    CanError(#[from] CanError),
-    #[error("Hardware initialization error")]
-    InitError,
-    #[error("Invalid configuration")]
-    ConfigError,
+#[derive(Debug, Clone)]
+pub struct S32K148Can {
+    registers: CanRegisters,
 }
 
-impl embedded_can::Error for Error {
-    fn kind(&self) -> embedded_can::ErrorKind {
-        match self {
-            Error::CanError(_) => embedded_can::ErrorKind::Other,
-            Error::InitError => embedded_can::ErrorKind::Other,
-            Error::ConfigError => embedded_can::ErrorKind::Other,
+impl S32K148Can {
+    fn new(registers: CanRegisters) -> Self {
+        Self { registers }
+    }
+}
+
+impl Can for S32K148Can {
+    type Frame = S32K148Frame;
+    type Error = S32K148Error;
+
+    fn transmit(&mut self, frame: &Self::Frame) -> Result<(), Self::Error> {
+        unsafe {
+            // Check if any transmit buffer is available
+            let status = Stat1::from_bits_truncate(self.registers.stat1.get());
+            if !status.contains(Stat1::TX) {
+                return Err(S32K148Error::Can(S32KCanError::TransmitError));
+            }
+
+            // Find an available transmit buffer
+            for i in 0..16 {
+                let mb_cs = self.registers.mb[i].cs.get();
+                if (mb_cs & MessageBufferControl::CODE.bits()) == 0 {
+                    // Configure message buffer for transmission
+                    let id = match frame.id() {
+                        Id::Standard(id) => id.as_raw() as u32,
+                        Id::Extended(id) => id.as_raw(),
+                    };
+
+                    self.registers.mb[i].id.set(id);
+                    self.registers.mb[i]
+                        .word0
+                        .set(u32::from_le_bytes(frame.data[0..4].try_into().unwrap()));
+                    self.registers.mb[i]
+                        .word1
+                        .set(u32::from_le_bytes(frame.data[4..8].try_into().unwrap()));
+
+                    // Set up control word for transmission
+                    let cs = MessageBufferControl::CODE.bits() | // Active for transmission
+                            (frame.dlc() as u32) << 16; // Data length code
+                    self.registers.mb[i].cs.set(cs);
+
+                    return Ok(());
+                }
+            }
+
+            Err(S32K148Error::Can(S32KCanError::TransmitError))
+        }
+    }
+
+    fn receive(&mut self) -> Result<Self::Frame, Self::Error> {
+        unsafe {
+            // Check if any message is available
+            let status = Stat1::from_bits_truncate(self.registers.stat1.get());
+            if !status.contains(Stat1::RX) {
+                return Err(S32K148Error::Can(S32KCanError::ReceiveError));
+            }
+
+            // Find a received message
+            for i in 0..16 {
+                let mb_cs = self.registers.mb[i].cs.get();
+                if (mb_cs & MessageBufferControl::CODE.bits()) == 0x4 {
+                    // RX_FULL
+                    let id = self.registers.mb[i].id.get();
+                    let dlc = ((mb_cs >> 16) & 0xF) as usize;
+
+                    let word0 = self.registers.mb[i].word0.get();
+                    let word1 = self.registers.mb[i].word1.get();
+
+                    let mut data = [0u8; 8];
+                    data[0..4].copy_from_slice(&word0.to_le_bytes());
+                    data[4..8].copy_from_slice(&word1.to_le_bytes());
+
+                    // Clear the RX_FULL flag
+                    self.registers.mb[i].cs.set(0);
+
+                    // Create frame with appropriate ID type
+                    let id = if (id & (1 << 30)) != 0 {
+                        Id::Extended(ExtendedId::new(id & 0x1FFFFFFF).unwrap())
+                    } else {
+                        Id::Standard(StandardId::new((id & 0x7FF) as u16).unwrap())
+                    };
+
+                    return S32K148Frame::new(id, &data[..dlc])
+                        .ok_or(S32K148Error::Can(S32KCanError::ReceiveError));
+                }
+            }
+
+            Err(S32K148Error::Can(S32KCanError::ReceiveError))
         }
     }
 }
 
 pub struct S32K148Hal {
     can: S32K148Can,
+    flash: Flash,
+    programming_mode: bool,
 }
 
-struct S32K148Can {
-    registers: &'static mut CanRegisters,
+#[derive(Debug)]
+pub enum S32K148Error {
+    Can(S32KCanError),
+    Flash(FlashError),
+    InvalidOperation,
+    ProgrammingModeError,
+    JumpError,
+}
+
+impl core::fmt::Display for S32K148Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            S32K148Error::Can(e) => write!(f, "CAN error: {:?}", e),
+            S32K148Error::Flash(e) => write!(f, "Flash error: {:?}", e),
+            S32K148Error::InvalidOperation => write!(f, "Invalid operation"),
+            S32K148Error::ProgrammingModeError => write!(f, "Programming mode error"),
+            S32K148Error::JumpError => write!(f, "Jump error"),
+        }
+    }
+}
+
+impl core::error::Error for S32K148Error {}
+
+impl From<S32KCanError> for S32K148Error {
+    fn from(err: S32KCanError) -> Self {
+        S32K148Error::Can(err)
+    }
+}
+
+impl From<FlashError> for S32K148Error {
+    fn from(err: FlashError) -> Self {
+        S32K148Error::Flash(err)
+    }
+}
+
+impl From<S32K148Error> for HalError {
+    fn from(err: S32K148Error) -> Self {
+        match err {
+            S32K148Error::Can(_) => HalError::CanError,
+            S32K148Error::Flash(_) => HalError::FlashError,
+            S32K148Error::InvalidOperation => HalError::InvalidOperation,
+            S32K148Error::ProgrammingModeError => HalError::ProgrammingModeError,
+            S32K148Error::JumpError => HalError::JumpError,
+        }
+    }
+}
+
+impl CanError for S32K148Error {
+    fn kind(&self) -> embedded_can::ErrorKind {
+        embedded_can::ErrorKind::Other
+    }
+}
+
+impl S32K148Hal {
+    fn init_can(&mut self) -> Result<(), S32K148Error> {
+        // Configure CAN peripheral
+        unsafe {
+            // Enable CAN clock and configure pins (TODO: Add proper clock and pin config)
+            
+            // Enter freeze mode
+            let ctrl1 = self.can.registers.ctrl1.get();
+            self.can.registers.ctrl1.set(ctrl1 & !Ctrl1::CAN_EN.bits());
+            self.can.registers.ctrl1.set(ctrl1 | (Ctrl1::HALT.bits() | Ctrl1::FRZ.bits()));
+            
+            // Configure bit timing for 500kbps at 80MHz clock:
+            // Prescaler = 4, Prop_Seg = 7, Phase_Seg1 = 4, Phase_Seg2 = 4, RJW = 4
+            let timing = BitTiming::PRESDIV.bits() & (3 << 16) |
+                        BitTiming::PROPSEG.bits() & (6 << 0) |
+                        BitTiming::PSEG1.bits() & (3 << 3) |
+                        BitTiming::PSEG2.bits() & (3 << 6) |
+                        BitTiming::RJW.bits() & (3 << 9);
+            self.can.registers.btr.set(timing);
+            
+            // Configure message buffers
+            for i in 0..16 {
+                self.can.registers.mb[i].cs.set(0); // Inactive
+            }
+            
+            // Exit freeze mode and enable CAN
+            let ctrl1 = self.can.registers.ctrl1.get();
+            self.can.registers.ctrl1.set(ctrl1 | Ctrl1::CAN_EN.bits());
+            self.can.registers.ctrl1.set(ctrl1 & !(Ctrl1::HALT.bits() | Ctrl1::FRZ.bits()));
+        }
+        
+        Ok(())
+    }
+}
+
+impl S32KHal for S32K148Hal {
+    type Can = S32K148Can;
+    type Error = S32K148Error;
+
+    fn init() -> Result<Self, HalError> {
+        let mut hal = Self {
+            can: S32K148Can::new(CanRegisters::default()),
+            flash: Flash::new(),
+            programming_mode: false,
+        };
+        
+        hal.init_can().map_err(Into::into)?;
+        Ok(hal)
+    }
+
+    fn get_can(&self) -> Self::Can {
+        self.can.clone()
+    }
+
+    fn get_can_mut(&mut self) -> &mut Self::Can {
+        &mut self.can
+    }
+
+    fn enter_programming_mode(&mut self) -> Result<(), Self::Error> {
+        // Disable interrupts
+        unsafe {
+            cortex_m::interrupt::disable();
+        }
+
+        // Configure system for programming mode
+        // TODO: Add specific S32K148 programming mode setup
+
+        self.programming_mode = true;
+        Ok(())
+    }
+
+    fn exit_programming_mode(&mut self) -> Result<(), Self::Error> {
+        // Re-enable interrupts
+        unsafe {
+            cortex_m::interrupt::enable();
+        }
+
+        // Restore system configuration
+        // TODO: Add specific S32K148 programming mode cleanup
+
+        self.programming_mode = false;
+        Ok(())
+    }
+
+    fn erase_flash(&mut self, address: u32, length: u32) -> Result<(), Self::Error> {
+        self.flash.erase(address, length)
+            .map_err(S32K148Error::Flash)
+    }
+
+    fn write_flash(&mut self, address: u32, data: &[u8]) -> Result<(), Self::Error> {
+        self.flash.write(address, data)
+            .map_err(S32K148Error::Flash)
+    }
+
+    fn read_flash(&self, address: u32, data: &mut [u8]) -> Result<(), Self::Error> {
+        let read_data = self.flash.read(address, data.len() as u32)
+            .map_err(S32K148Error::Flash)?;
+        
+        data.copy_from_slice(read_data);
+        Ok(())
+    }
+
+    fn is_programming_pin_active(&self) -> bool {
+        // TODO: Implement actual pin check
+        // For now, return false to indicate no programming request
+        false
+    }
+
+    fn jump_to_application(&self, entry_point: u32) -> Result<(), Self::Error> {
+        // Validate entry point
+        if entry_point < 0x0001_0000 || entry_point > 0x00FF_FFFF {
+            return Err(S32K148Error::JumpError);
+        }
+
+        // Disable interrupts
+        unsafe {
+            cortex_m::interrupt::disable();
+        }
+
+        // Set up jump
+        unsafe {
+            let jump: fn() -> ! = core::mem::transmute(entry_point as *const ());
+            jump();
+        }
+
+        // Note: This point should never be reached
+        Err(S32K148Error::JumpError)
+    }
 }
 
 // Custom CAN frame implementation for S32K148
@@ -43,7 +305,7 @@ struct S32K148Can {
 pub struct S32K148Frame {
     id: Id,
     data: [u8; 8],
-    dlc: u8,
+    dlc: usize,
     is_remote: bool,
 }
 
@@ -57,12 +319,12 @@ impl Frame for S32K148Frame {
         Some(S32K148Frame {
             id,
             data: frame_data,
-            dlc: len as u8,
+            dlc: len,
             is_remote: false,
         })
     }
 
-    fn new_remote(id: impl Into<Id>, dlc: u8) -> Option<Self> {
+    fn new_remote(id: impl Into<Id>, dlc: usize) -> Option<Self> {
         if dlc > 8 {
             return None;
         }
@@ -79,12 +341,12 @@ impl Frame for S32K148Frame {
         self.id
     }
 
-    fn dlc(&self) -> u8 {
+    fn dlc(&self) -> usize {
         self.dlc
     }
 
     fn data(&self) -> &[u8] {
-        &self.data[..self.dlc as usize]
+        &self.data[..self.dlc]
     }
 
     fn is_extended(&self) -> bool {
@@ -96,155 +358,14 @@ impl Frame for S32K148Frame {
     }
 }
 
-impl S32K148Hal {
-    pub fn new() -> Result<Self, Error> {
-        // TODO: Initialize S32K148 hardware
-        // 1. Configure clock system
-        // 2. Initialize CAN peripheral
-        // 3. Configure GPIO for CAN pins
-
-        // Initialize CAN peripheral
-        let can = unsafe {
-            S32K148Can {
-                registers: &mut *(can::CAN0_BASE as *mut CanRegisters),
-            }
-        };
-
-        // Configure CAN
-        can.setup_can()?;
-
-        Ok(S32K148Hal { can })
-    }
-
-    pub fn get_can(&self) -> &S32K148Can {
-        &self.can
-    }
-
-    pub fn get_can_mut(&mut self) -> &mut S32K148Can {
-        &mut self.can
-    }
-}
-
-impl S32K148Can {
-    fn setup_can(&self) -> Result<(), Error> {
-        unsafe {
-            // Enter freeze mode
-            self.registers.mcr.write(1 << 2); // FRZ bit
-
-            // Configure bit timing for 500kbps
-            // Assuming 80MHz CAN clock
-            // Tq = (PRESDIV + 1) * (1/80MHz)
-            // Bit time = (1 + PROPSEG + PSEG1 + PSEG2) * Tq
-            // 500kbps = 2µs bit time
-            // With 80MHz clock, we need 160 Tq per bit
-            let btr = BitTiming::PRESDIV.bits() | // Prescaler = 0
-                     (6 << 0) | // PROPSEG = 6
-                     (7 << 3) | // PSEG1 = 7
-                     (6 << 6) | // PSEG2 = 6
-                     (2 << 9); // RJW = 2
-            self.registers.btr.write(btr);
-
-            // Configure message buffers
-            for i in 0..16 {
-                self.registers.mb[i].cs.write(0);
-                self.registers.mb[i].id.write(0);
-                self.registers.mb[i].word0.write(0);
-                self.registers.mb[i].word1.write(0);
-            }
-
-            // Exit freeze mode and enable CAN
-            self.registers.mcr.write(0);
-            self.registers.ctrl1.write(Ctrl1::CAN_EN.bits());
-        }
-
-        Ok(())
-    }
-}
-
-impl Can for S32K148Can {
-    type Frame = S32K148Frame;
-    type Error = Error;
-
-    fn transmit(&mut self, frame: &Self::Frame) -> nb::Result<Option<Self::Frame>, Self::Error> {
-        unsafe {
-            // Check if any transmit buffer is available
-            let status = Stat1::from_bits_truncate(self.registers.stat1.read());
-            if !status.contains(Stat1::TX) {
-                return Err(nb::Error::WouldBlock);
-            }
-
-            // Find an available transmit buffer
-            for i in 0..16 {
-                let mb_cs = self.registers.mb[i].cs.read();
-                if (mb_cs & MessageBufferControl::CODE.bits()) == 0 {
-                    // Configure message buffer for transmission
-                    let id = match frame.id() {
-                        Id::Standard(id) => id.as_raw() as u32,
-                        Id::Extended(id) => id.as_raw(),
-                    };
-
-                    self.registers.mb[i].id.write(id);
-                    self.registers.mb[i]
-                        .word0
-                        .write(u32::from_le_bytes(frame.data[0..4].try_into().unwrap()));
-                    self.registers.mb[i]
-                        .word1
-                        .write(u32::from_le_bytes(frame.data[4..8].try_into().unwrap()));
-
-                    // Set up control word for transmission
-                    let cs = MessageBufferControl::CODE.bits() | // Active for transmission
-                            (frame.dlc() as u32) << 16; // Data length code
-                    self.registers.mb[i].cs.write(cs);
-
-                    return Ok(None);
-                }
-            }
-
-            Err(nb::Error::WouldBlock)
-        }
-    }
-
-    fn receive(&mut self) -> nb::Result<Self::Frame, Self::Error> {
-        unsafe {
-            // Check if any message is available
-            let status = Stat1::from_bits_truncate(self.registers.stat1.read());
-            if !status.contains(Stat1::RX) {
-                return Err(nb::Error::WouldBlock);
-            }
-
-            // Find a received message
-            for i in 0..16 {
-                let mb_cs = self.registers.mb[i].cs.read();
-                if (mb_cs & MessageBufferControl::CODE.bits()) == 0x4 {
-                    // RX_FULL
-                    let id = self.registers.mb[i].id.read();
-                    let dlc = ((mb_cs >> 16) & 0xF) as u8;
-
-                    let word0 = self.registers.mb[i].word0.read();
-                    let word1 = self.registers.mb[i].word1.read();
-
-                    let mut data = [0u8; 8];
-                    data[0..4].copy_from_slice(&word0.to_le_bytes());
-                    data[4..8].copy_from_slice(&word1.to_le_bytes());
-
-                    // Clear the RX_FULL flag
-                    self.registers.mb[i].cs.write(0);
-
-                    // Create frame with appropriate ID type
-                    let frame = if (id & (1 << 30)) != 0 {
-                        S32K148Frame::new(ExtendedId::new(id & 0x1FFFFFFF), &data[..dlc as usize])
-                    } else {
-                        S32K148Frame::new(
-                            StandardId::new((id & 0x7FF) as u16),
-                            &data[..dlc as usize],
-                        )
-                    };
-
-                    return Ok(frame);
-                }
-            }
-
-            Err(nb::Error::WouldBlock)
+impl From<S32K148Error> for HalError {
+    fn from(err: S32K148Error) -> Self {
+        match err {
+            S32K148Error::Can(_) => HalError::CanError,
+            S32K148Error::Flash(_) => HalError::FlashError,
+            S32K148Error::InvalidOperation => HalError::InvalidOperation,
+            S32K148Error::ProgrammingModeError => HalError::ProgrammingModeError,
+            S32K148Error::JumpError => HalError::JumpError,
         }
     }
 }
