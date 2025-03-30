@@ -1,6 +1,6 @@
-use volatile_register::{RW, RO, WO};
-use vcell::VolatileCell;
 use bitflags::bitflags;
+use vcell::VolatileCell;
+use volatile_register::{RO, RW, WO};
 
 // CAN Peripheral Base Addresses
 pub const CAN0_BASE: u32 = 0x4002_4000;
@@ -151,4 +151,4 @@ impl CanError {
             Some(CanError::Unknown)
         }
     }
-} 
+}

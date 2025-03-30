@@ -17,9 +17,7 @@ impl S32KHal for S32K148Hal {
         // 1. Configure clock system
         // 2. Initialize CAN peripheral
         // 3. Configure GPIO for CAN pins
-        Ok(S32K148Hal {
-            can: S32K148Can {},
-        })
+        Ok(S32K148Hal { can: S32K148Can {} })
     }
 
     fn get_can(&self) -> &Self::Can {
@@ -44,4 +42,4 @@ impl Can for S32K148Can {
         // TODO: Implement CAN reception
         Err(nb::Error::WouldBlock)
     }
-} 
+}

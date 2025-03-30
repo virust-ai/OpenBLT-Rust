@@ -7,7 +7,7 @@ use nb;
 use thiserror::Error;
 
 mod can;
-use can::{CanRegisters, CanError, Ctrl1, Stat1, BitTiming, MessageBufferControl};
+use can::{BitTiming, CanError, CanRegisters, Ctrl1, MessageBufferControl, Stat1};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -33,7 +33,7 @@ impl S32K148Hal {
         // 1. Configure clock system
         // 2. Initialize CAN peripheral
         // 3. Configure GPIO for CAN pins
-        
+
         // Initialize CAN peripheral
         let can = unsafe {
             S32K148Can {
@@ -72,7 +72,7 @@ impl S32K148Can {
                      (6 << 0) | // PROPSEG = 6
                      (7 << 3) | // PSEG1 = 7
                      (6 << 6) | // PSEG2 = 6
-                     (2 << 9);  // RJW = 2
+                     (2 << 9); // RJW = 2
             self.registers.btr.write(btr);
 
             // Configure message buffers
@@ -123,4 +123,4 @@ impl Can for S32K148Can {
             Err(nb::Error::WouldBlock)
         }
     }
-} 
+}

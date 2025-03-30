@@ -79,4 +79,4 @@ impl<C: Can> Protocol<C> {
     fn handle_reboot(&mut self) -> Result<(), ProtocolError> {
         Ok(())
     }
-} 
+}
