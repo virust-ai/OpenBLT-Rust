@@ -5,23 +5,34 @@ use thiserror::Error;
 mod memory;
 use memory::{MemoryManager, MemoryManagementError};
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum BootloaderError {
-    #[error("Protocol error: {0}")]
-    Protocol(#[from] ProtocolError),
-    #[error("Hardware error: {0}")]
-    Hardware(String),
-    #[error("Invalid firmware")]
-    InvalidFirmware,
-    #[error("Verification failed")]
+    Hardware(&'static str),
+    InvalidState,
+    InvalidCommand,
+    InvalidAddress,
+    InvalidLength,
     VerificationFailed,
-    #[error("Programming failed")]
-    ProgrammingFailed,
-    #[error("Memory error: {0}")]
-    Memory(#[from] MemoryManagementError),
-    #[error("Invalid entry condition")]
-    InvalidEntryCondition,
+    MemoryError,
+    ProtocolError,
 }
+
+impl core::fmt::Display for BootloaderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            BootloaderError::Hardware(msg) => write!(f, "Hardware error: {}", msg),
+            BootloaderError::InvalidState => write!(f, "Invalid state"),
+            BootloaderError::InvalidCommand => write!(f, "Invalid command"),
+            BootloaderError::InvalidAddress => write!(f, "Invalid address"),
+            BootloaderError::InvalidLength => write!(f, "Invalid length"),
+            BootloaderError::VerificationFailed => write!(f, "Verification failed"),
+            BootloaderError::MemoryError => write!(f, "Memory error"),
+            BootloaderError::ProtocolError => write!(f, "Protocol error"),
+        }
+    }
+}
+
+impl core::error::Error for BootloaderError {}
 
 pub struct Bootloader<H: S32KHal> {
     hal: H,
@@ -35,39 +46,36 @@ impl<H: S32KHal> Bootloader<H> {
         let can = hal.get_can();
         let memory = MemoryManager::new(hal.clone())?;
         
-        Self {
+        Ok(Self {
             hal,
             protocol: Protocol::new(can),
             memory,
             is_programming_enabled: false,
-        }
+        })
     }
 
     pub fn run(&mut self) -> Result<(), BootloaderError> {
-        // Check entry conditions
-        if self.should_enter_programming_mode() {
-            self.enter_programming_mode()?;
-        } else {
-            // Jump to application if valid
-            self.jump_to_application()?;
-            return Ok(());
-        }
-
-        // Main bootloader loop
-        loop {
-            // Handle incoming CAN messages
-            self.handle_can_messages()?;
-
-            // Process commands
-            self.process_commands()?;
-
-            // Handle firmware programming
-            if self.is_programming_enabled {
-                self.program_firmware()?;
+        match self.state {
+            BootloaderState::Idle => {
+                if self.hal.is_programming_pin_active() {
+                    self.enter_programming_mode()?;
+                } else {
+                    self.jump_to_application()?;
+                }
             }
-
-            cortex_m::asm::nop();
+            BootloaderState::Programming => {
+                self.handle_can_messages()?;
+            }
+            BootloaderState::Verifying => {
+                let (address, data) = self.protocol.get_firmware_data()
+                    .map_err(|_| BootloaderError::ProtocolError)?;
+                self.verify_firmware(address, data)?;
+            }
+            BootloaderState::Rebooting => {
+                self.exit_programming_mode()?;
+            }
         }
+        Ok(())
     }
 
     fn should_enter_programming_mode(&self) -> bool {
@@ -115,82 +123,84 @@ impl<H: S32KHal> Bootloader<H> {
     }
 
     fn jump_to_application(&self) -> Result<(), BootloaderError> {
-        // Get application entry point
-        let mut data = [0u8; 4];
-        self.memory.read_region(
-            self.memory.get_application_start(),
-            &mut data
-        )?;
-
-        let entry_point = u32::from_le_bytes(data);
-
-        // TODO: Implement actual jump to application
-        // This will be implemented in the HAL
-        Ok(())
+        self.hal
+            .jump_to_application(self.memory.get_application_start())
+            .map_err(|_| BootloaderError::Hardware("Failed to jump to application"))
     }
 
     fn enter_programming_mode(&mut self) -> Result<(), BootloaderError> {
-        // Initialize programming mode
+        self.hal
+            .enter_programming_mode()
+            .map_err(|_| BootloaderError::Hardware("Failed to enter programming mode"))?;
         self.is_programming_enabled = true;
-        self.hal.enter_programming_mode()?;
         Ok(())
     }
 
     fn exit_programming_mode(&mut self) -> Result<(), BootloaderError> {
-        // Clean up programming mode
+        self.hal
+            .exit_programming_mode()
+            .map_err(|_| BootloaderError::Hardware("Failed to exit programming mode"))?;
         self.is_programming_enabled = false;
-        self.hal.exit_programming_mode()?;
         Ok(())
     }
 
     fn handle_can_messages(&mut self) -> Result<(), BootloaderError> {
-        // Handle incoming CAN messages
-        // This is handled by the protocol module
-        Ok(())
+        self.protocol
+            .run()
+            .map_err(|_| BootloaderError::ProtocolError)
     }
 
     fn process_commands(&mut self) -> Result<(), BootloaderError> {
-        // Process any pending commands
-        // This is handled by the protocol module
-        Ok(())
+        self.protocol
+            .run()
+            .map_err(|_| BootloaderError::ProtocolError)
     }
 
     fn program_firmware(&mut self) -> Result<(), BootloaderError> {
-        // Erase application region
-        self.memory.erase_region(
-            self.memory.get_application_start(),
-            self.memory.get_application_size()
-        )?;
-
-        // Program firmware
-        // This will be handled by the protocol module's write commands
-        // The protocol module will call verify_firmware after each write
-
+        self.state = BootloaderState::Programming;
         Ok(())
     }
 
     pub fn verify_firmware(&mut self, address: u32, data: &[u8]) -> Result<(), BootloaderError> {
-        // Verify firmware data
-        let mut verify_data = vec![0u8; data.len()];
-        self.memory.read_region(address, &mut verify_data)?;
+        let mut verify_data = [0u8; 1024]; // Fixed-size buffer
+        let mut remaining = data.len();
+        let mut offset = 0;
 
-        // Compare data
-        if verify_data != data {
-            return Err(BootloaderError::VerificationFailed);
+        while remaining > 0 {
+            let chunk_size = remaining.min(verify_data.len());
+            self.memory
+                .read(address + offset as u32, &mut verify_data[..chunk_size])
+                .map_err(|_| BootloaderError::MemoryError)?;
+
+            if &verify_data[..chunk_size] != &data[offset..offset + chunk_size] {
+                return Err(BootloaderError::VerificationFailed);
+            }
+
+            remaining -= chunk_size;
+            offset += chunk_size;
         }
 
         Ok(())
     }
 
     pub fn calculate_firmware_checksum(&mut self) -> Result<u32, BootloaderError> {
-        // Calculate checksum of entire firmware region
-        let mut data = vec![0u8; self.memory.get_application_size() as usize];
-        self.memory.read_region(self.memory.get_application_start(), &mut data)?;
-
+        let mut data = [0u8; 1024]; // Fixed-size buffer
         let mut checksum = 0u32;
-        for chunk in data.chunks(4) {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap());
-            checksum ^= word;
+        let mut remaining = self.memory.get_application_size() as usize;
+        let mut offset = 0;
+
+        while remaining > 0 {
+            let chunk_size = remaining.min(data.len());
+            self.memory
+                .read(offset as u32, &mut data[..chunk_size])
+                .map_err(|_| BootloaderError::MemoryError)?;
+
+            for &byte in &data[..chunk_size] {
+                checksum = checksum.wrapping_add(byte as u32);
+            }
+
+            remaining -= chunk_size;
+            offset += chunk_size;
         }
 
         Ok(checksum)
