@@ -8,6 +8,8 @@ use thiserror::Error;
 mod can;
 use can::{BitTiming, CanError, CanRegisters, Ctrl1, MessageBufferControl, Stat1};
 
+pub mod flash;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("CAN communication error: {0}")]
