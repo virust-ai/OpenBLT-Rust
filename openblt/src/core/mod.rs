@@ -96,30 +96,36 @@ impl<H: S32KHal> Bootloader<H> {
         programming_pin_active || !application_valid || programming_requested
     }
 
-    fn is_application_valid(&self) -> bool {
-        // Basic application validation:
-        // 1. Check if application region is not empty (not all 0xFF)
-        // 2. Check if application has valid entry point
-        // 3. Check if application checksum is valid
+    pub fn is_application_valid(&self) -> bool {
+        // Check if application exists in flash
+        let app_start = self.memory.get_app_start();
+        let app_end = self.memory.get_app_end();
 
         // Read first word of application
-        let mut data = [0u8; 4];
-        if let Ok(()) = self.memory.read_region(
-            self.memory.get_application_start(),
-            &mut data
-        ) {
-            let first_word = u32::from_le_bytes(data);
-            
-            // Check if not erased (0xFFFFFFFF)
-            if first_word == 0xFFFFFFFF {
-                return false;
-            }
-
-            // TODO: Add more validation (entry point, checksum)
-            true
-        } else {
-            false
+        let mut first_word = [0u8; 4];
+        if self.memory.read_memory(app_start, &mut first_word).is_err() {
+            return false;
         }
+
+        // Check if first word is a valid stack pointer (should be in RAM)
+        let sp = u32::from_le_bytes(first_word);
+        if sp < 0x2000_0000 || sp > 0x2004_0000 {
+            return false;
+        }
+
+        // Check if application has valid vector table
+        let mut reset_vector = [0u8; 4];
+        if self.memory.read_memory(app_start + 4, &mut reset_vector).is_err() {
+            return false;
+        }
+
+        // Reset vector should point to application code
+        let reset_addr = u32::from_le_bytes(reset_vector);
+        if reset_addr < app_start || reset_addr > app_end {
+            return false;
+        }
+
+        true
     }
 
     fn jump_to_application(&self) -> Result<(), BootloaderError> {
@@ -204,5 +210,17 @@ impl<H: S32KHal> Bootloader<H> {
         }
 
         Ok(checksum)
+    }
+
+    pub fn get_hal(&self) -> &H {
+        &self.hal
+    }
+
+    pub fn get_hal_mut(&mut self) -> &mut H {
+        &mut self.hal
+    }
+
+    pub fn get_memory(&self) -> &Memory {
+        &self.memory
     }
 }

@@ -1,18 +1,25 @@
 use embedded_can::{Can, Frame, Id, StandardId};
 use nb::block;
 use s32k148_hal::S32K148Frame;
+use thiserror::Error;
 
 mod memory;
 use memory::{Memory, MemoryError};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ProtocolError {
+    #[error("Timeout error")]
+    TimeoutError,
+    #[error("Invalid command")]
     InvalidCommand,
+    #[error("Invalid length")]
     InvalidLength,
+    #[error("Invalid data")]
+    InvalidData,
+    #[error("Programming not enabled")]
+    ProgrammingNotEnabled,
     ChecksumError,
     CommunicationError,
-    TimeoutError,
-    ProgrammingNotEnabled,
     MemoryError(MemoryError),
 }
 
@@ -20,12 +27,13 @@ impl core::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ProtocolError::InvalidCommand => write!(f, "Invalid command"),
-            ProtocolError::InvalidLength => write!(f, "Invalid data length"),
+            ProtocolError::InvalidLength => write!(f, "Invalid length"),
             ProtocolError::ChecksumError => write!(f, "Checksum error"),
             ProtocolError::CommunicationError => write!(f, "Communication error"),
             ProtocolError::TimeoutError => write!(f, "Timeout error"),
             ProtocolError::ProgrammingNotEnabled => write!(f, "Programming not enabled"),
             ProtocolError::MemoryError(e) => write!(f, "Memory error: {}", e),
+            ProtocolError::InvalidData => write!(f, "Invalid data"),
         }
     }
 }
@@ -38,16 +46,16 @@ impl From<MemoryError> for ProtocolError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
-    GetProtocolVersion = 0x01,
-    SetProgrammingEnabled = 0x02,
-    GetProgrammingEnabled = 0x03,
-    EraseMemory = 0x04,
-    WriteData = 0x05,
-    ReadData = 0x06,
-    GetChecksum = 0x07,
-    Reboot = 0x08,
+    GetProtocolVersion,
+    SetProgrammingEnabled,
+    GetProgrammingEnabled,
+    EraseMemory,
+    WriteData,
+    ReadData,
+    GetChecksum,
+    Reboot,
 }
 
 impl Command {
@@ -141,7 +149,6 @@ impl<C: Can> Protocol<C> {
             return Err(ProtocolError::ProgrammingNotEnabled);
         }
 
-        // Parse address and length from data
         if data.len() < 8 {
             return Err(ProtocolError::InvalidLength);
         }
@@ -149,12 +156,7 @@ impl<C: Can> Protocol<C> {
         let address = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let length = u32::from_le_bytes(data[4..8].try_into().unwrap());
 
-        // Erase memory
-        self.memory.erase(address, length)?;
-
-        let response = [0x00]; // Success
-        self.send_response(&response)?;
-        Ok(())
+        self.erase_memory(address, length)
     }
 
     fn handle_write_data(&mut self, data: &[u8]) -> Result<(), ProtocolError> {
@@ -162,28 +164,17 @@ impl<C: Can> Protocol<C> {
             return Err(ProtocolError::ProgrammingNotEnabled);
         }
 
-        // Parse address and data
-        if data.len() < 4 {
+        if data.len() < 8 {
             return Err(ProtocolError::InvalidLength);
         }
 
         let address = u32::from_le_bytes(data[0..4].try_into().unwrap());
-        let write_data = &data[4..];
+        let length = u32::from_le_bytes(data[4..8].try_into().unwrap());
 
-        // Write data to memory
-        self.memory.write(address, write_data)?;
-
-        let response = [0x00]; // Success
-        self.send_response(&response)?;
-        Ok(())
+        self.write_data(address, &data[8..])
     }
 
     fn handle_read_data(&mut self, data: &[u8]) -> Result<(), ProtocolError> {
-        if !self.is_programming_enabled {
-            return Err(ProtocolError::ProgrammingNotEnabled);
-        }
-
-        // Parse address and length
         if data.len() < 8 {
             return Err(ProtocolError::InvalidLength);
         }
@@ -191,20 +182,10 @@ impl<C: Can> Protocol<C> {
         let address = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let length = u32::from_le_bytes(data[4..8].try_into().unwrap());
 
-        // Read data from memory
-        let read_data = self.memory.read(address, length)?;
-
-        // Send response with data
-        self.send_response(read_data)?;
-        Ok(())
+        self.read_data(address, length)
     }
 
     fn handle_get_checksum(&mut self, data: &[u8]) -> Result<(), ProtocolError> {
-        if !self.is_programming_enabled {
-            return Err(ProtocolError::ProgrammingNotEnabled);
-        }
-
-        // Parse address and length
         if data.len() < 8 {
             return Err(ProtocolError::InvalidLength);
         }
@@ -212,29 +193,106 @@ impl<C: Can> Protocol<C> {
         let address = u32::from_le_bytes(data[0..4].try_into().unwrap());
         let length = u32::from_le_bytes(data[4..8].try_into().unwrap());
 
-        // Calculate checksum
-        let checksum = self.memory.calculate_checksum(address, length)?;
-
-        // Send response with checksum
-        let response = checksum.to_le_bytes();
+        // TODO: Implement checksum calculation
+        let response = [0x00, 0x00, 0x00, 0x00]; // Checksum
         self.send_response(&response)?;
         Ok(())
     }
 
     fn handle_reboot(&mut self) -> Result<(), ProtocolError> {
-        // Send success response before rebooting
-        let response = [0x00];
+        // TODO: Implement reboot
+        let response = [0x00]; // Success
         self.send_response(&response)?;
         Ok(())
     }
 
     fn send_response(&mut self, data: &[u8]) -> Result<(), ProtocolError> {
-        // Create response frame
-        let frame = C::Frame::new(self.command_id, data)
-            .ok_or(ProtocolError::InvalidLength)?;
+        // Create response frame with command ID
+        let id = StandardId::new(self.command_id)
+            .ok_or(ProtocolError::InvalidCommand)?;
+        
+        // Create frame with data
+        let frame = S32K148Frame::new(id, data)
+            .ok_or(ProtocolError::InvalidData)?;
 
-        // Send frame
+        // Transmit frame
         self.can.transmit(&frame)
-            .map_err(|_| ProtocolError::CommunicationError)
+            .map_err(|_| ProtocolError::TimeoutError)?;
+
+        Ok(())
+    }
+
+    pub fn is_programming_requested(&self) -> bool {
+        self.is_programming_enabled
+    }
+
+    fn erase_memory(&mut self, address: u32, length: u32) -> Result<(), ProtocolError> {
+        // Validate address and length
+        if !self.memory.is_valid_address_range(address, length) {
+            return Err(ProtocolError::InvalidData);
+        }
+
+        // Erase the memory region
+        self.memory.erase_region(address, length)
+            .map_err(|e| ProtocolError::MemoryError(e))?;
+
+        Ok(())
+    }
+
+    fn write_data(&mut self, address: u32, data: &[u8]) -> Result<(), ProtocolError> {
+        // Validate address and length
+        if !self.memory.is_valid_address_range(address, data.len() as u32) {
+            return Err(ProtocolError::InvalidData);
+        }
+
+        // Write the data to memory
+        self.memory.write_memory(address, data)
+            .map_err(|e| ProtocolError::MemoryError(e))?;
+
+        Ok(())
+    }
+
+    fn read_data(&mut self, address: u32, length: u32) -> Result<&[u8], ProtocolError> {
+        // Validate address and length
+        if !self.memory.is_valid_address_range(address, length) {
+            return Err(ProtocolError::InvalidData);
+        }
+
+        // Ensure read buffer is large enough
+        if length as usize > self.read_buffer.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
+
+        // Read the data into buffer
+        self.memory.read_memory(address, &mut self.read_buffer[..length as usize])
+            .map_err(|e| ProtocolError::MemoryError(e))?;
+
+        Ok(&self.read_buffer[..length as usize])
+    }
+}
+
+pub struct Memory {
+    base_address: u32,
+    size: u32,
+}
+
+impl Memory {
+    pub fn new(base_address: u32, size: u32) -> Self {
+        Self {
+            base_address,
+            size,
+        }
+    }
+
+    pub fn read(&self, address: u32, length: u32) -> Result<&[u8], ()> {
+        // Validate address and length
+        if address < self.base_address || address + length > self.base_address + self.size {
+            return Err(());
+        }
+
+        // Return a slice to the memory
+        let start = address as usize;
+        let end = (address + length) as usize;
+        Ok(unsafe { core::slice::from_raw_parts(start as *const u8, end - start) })
     }
 }

@@ -1,0 +1,9 @@
+[package]
+name = "test-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
+s32k148-hal = { path = "../s32k148-hal" } 
