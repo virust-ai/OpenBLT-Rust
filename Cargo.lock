@@ -511,6 +511,8 @@ dependencies = [
  "embedded-can",
  "nb 1.1.0",
  "thiserror",
+ "vcell",
+ "volatile-register",
 ]
 
 [[package]]
