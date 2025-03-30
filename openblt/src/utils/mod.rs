@@ -29,4 +29,4 @@ pub fn u32_to_bytes(value: u32) -> [u8; 4] {
         ((value >> 16) & 0xFF) as u8,
         ((value >> 24) & 0xFF) as u8,
     ]
-} 
+}

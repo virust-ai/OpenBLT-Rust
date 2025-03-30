@@ -54,4 +54,4 @@ impl<H: S32KHal> Bootloader<H> {
         // TODO: Implement firmware programming
         Ok(())
     }
-} 
+}

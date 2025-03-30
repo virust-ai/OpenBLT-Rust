@@ -18,8 +18,10 @@ pub enum HalError {
 
 pub trait S32KHal {
     type Can: Can;
-    
-    fn init() -> Result<Self, HalError> where Self: Sized;
+
+    fn init() -> Result<Self, HalError>
+    where
+        Self: Sized;
     fn get_can(&self) -> &Self::Can;
     fn get_can_mut(&mut self) -> &mut Self::Can;
-} 
+}
