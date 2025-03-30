@@ -2,6 +2,9 @@ use crate::hal::S32KHal;
 use crate::protocol::{Command, Protocol, ProtocolError};
 use thiserror::Error;
 
+mod memory;
+use memory::{MemoryManager, MemoryManagementError};
+
 #[derive(Error, Debug)]
 pub enum BootloaderError {
     #[error("Protocol error: {0}")]
@@ -14,25 +17,27 @@ pub enum BootloaderError {
     VerificationFailed,
     #[error("Programming failed")]
     ProgrammingFailed,
+    #[error("Memory error: {0}")]
+    Memory(#[from] MemoryManagementError),
 }
 
 pub struct Bootloader<H: S32KHal> {
     hal: H,
     protocol: Protocol<H::Can>,
+    memory: MemoryManager<H>,
     is_programming_enabled: bool,
-    firmware_start: u32,
-    firmware_size: u32,
 }
 
 impl<H: S32KHal> Bootloader<H> {
-    pub fn new(hal: H) -> Self {
+    pub fn new(hal: H) -> Result<Self, BootloaderError> {
         let can = hal.get_can();
+        let memory = MemoryManager::new(hal.clone())?;
+        
         Self {
             hal,
             protocol: Protocol::new(can),
+            memory,
             is_programming_enabled: false,
-            firmware_start: 0x0001_0000, // Application start address
-            firmware_size: 0x0F0000,     // 960KB application size
         }
     }
 
@@ -95,7 +100,10 @@ impl<H: S32KHal> Bootloader<H> {
 
     fn program_firmware(&mut self) -> Result<(), BootloaderError> {
         // Erase application region
-        self.hal.erase_flash(self.firmware_start, self.firmware_size)?;
+        self.memory.erase_region(
+            self.memory.get_application_start(),
+            self.memory.get_application_size()
+        )?;
 
         // Program firmware
         // This will be handled by the protocol module's write commands
@@ -107,7 +115,7 @@ impl<H: S32KHal> Bootloader<H> {
     pub fn verify_firmware(&mut self, address: u32, data: &[u8]) -> Result<(), BootloaderError> {
         // Verify firmware data
         let mut verify_data = vec![0u8; data.len()];
-        self.hal.read_flash(address, &mut verify_data)?;
+        self.memory.read_region(address, &mut verify_data)?;
 
         // Compare data
         if verify_data != data {
@@ -119,8 +127,8 @@ impl<H: S32KHal> Bootloader<H> {
 
     pub fn calculate_firmware_checksum(&mut self) -> Result<u32, BootloaderError> {
         // Calculate checksum of entire firmware region
-        let mut data = vec![0u8; self.firmware_size as usize];
-        self.hal.read_flash(self.firmware_start, &mut data)?;
+        let mut data = vec![0u8; self.memory.get_application_size() as usize];
+        self.memory.read_region(self.memory.get_application_start(), &mut data)?;
 
         let mut checksum = 0u32;
         for chunk in data.chunks(4) {
