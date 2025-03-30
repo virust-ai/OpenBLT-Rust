@@ -1,21 +1,35 @@
 use core::convert::TryInto;
-use thiserror::Error;
 use s32k148_hal::flash::{Flash, FlashError};
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum MemoryError {
-    #[error("Invalid memory address")]
     InvalidAddress,
-    #[error("Invalid memory length")]
     InvalidLength,
-    #[error("Write error")]
     WriteError,
-    #[error("Read error")]
     ReadError,
-    #[error("Erase error")]
     EraseError,
-    #[error("Flash error: {0}")]
-    FlashError(#[from] FlashError),
+    FlashError(FlashError),
+}
+
+impl core::fmt::Display for MemoryError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MemoryError::InvalidAddress => write!(f, "Invalid memory address"),
+            MemoryError::InvalidLength => write!(f, "Invalid memory length"),
+            MemoryError::WriteError => write!(f, "Write error"),
+            MemoryError::ReadError => write!(f, "Read error"),
+            MemoryError::EraseError => write!(f, "Erase error"),
+            MemoryError::FlashError(e) => write!(f, "Flash error: {}", e),
+        }
+    }
+}
+
+impl core::error::Error for MemoryError {}
+
+impl From<FlashError> for MemoryError {
+    fn from(error: FlashError) -> Self {
+        MemoryError::FlashError(error)
+    }
 }
 
 pub struct Memory {
@@ -39,7 +53,7 @@ impl Memory {
             .map_err(MemoryError::FlashError)
     }
 
-    pub fn read(&mut self, address: u32, length: u32) -> Result<Vec<u8>, MemoryError> {
+    pub fn read(&mut self, address: u32, length: u32) -> Result<&[u8], MemoryError> {
         self.flash.read(address, length)
             .map_err(MemoryError::FlashError)
     }

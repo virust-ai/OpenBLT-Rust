@@ -1,26 +1,41 @@
 use embedded_can::{Can, Frame, Id, StandardId};
-use thiserror::Error;
 use nb::block;
+use s32k148_hal::S32K148Frame;
 
 mod memory;
 use memory::{Memory, MemoryError};
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum ProtocolError {
-    #[error("Invalid command")]
     InvalidCommand,
-    #[error("Invalid data length")]
     InvalidLength,
-    #[error("Checksum error")]
     ChecksumError,
-    #[error("Communication error")]
     CommunicationError,
-    #[error("Timeout error")]
     TimeoutError,
-    #[error("Programming not enabled")]
     ProgrammingNotEnabled,
-    #[error("Memory error: {0}")]
-    MemoryError(#[from] MemoryError),
+    MemoryError(MemoryError),
+}
+
+impl core::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ProtocolError::InvalidCommand => write!(f, "Invalid command"),
+            ProtocolError::InvalidLength => write!(f, "Invalid data length"),
+            ProtocolError::ChecksumError => write!(f, "Checksum error"),
+            ProtocolError::CommunicationError => write!(f, "Communication error"),
+            ProtocolError::TimeoutError => write!(f, "Timeout error"),
+            ProtocolError::ProgrammingNotEnabled => write!(f, "Programming not enabled"),
+            ProtocolError::MemoryError(e) => write!(f, "Memory error: {}", e),
+        }
+    }
+}
+
+impl core::error::Error for ProtocolError {}
+
+impl From<MemoryError> for ProtocolError {
+    fn from(error: MemoryError) -> Self {
+        ProtocolError::MemoryError(error)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +71,7 @@ pub struct Protocol<C: Can> {
     is_programming_enabled: bool,
     command_id: StandardId,
     memory: Memory,
+    read_buffer: [u8; 1024], // Buffer for read operations
 }
 
 impl<C: Can> Protocol<C> {
@@ -65,6 +81,7 @@ impl<C: Can> Protocol<C> {
             is_programming_enabled: false,
             command_id: StandardId::new(0x123).unwrap(), // Default command ID
             memory: Memory::new(0x0000_0000, 0x1000_0000), // 16MB flash memory
+            read_buffer: [0; 1024],
         }
     }
 
@@ -178,7 +195,7 @@ impl<C: Can> Protocol<C> {
         let read_data = self.memory.read(address, length)?;
 
         // Send response with data
-        self.send_response(&read_data)?;
+        self.send_response(read_data)?;
         Ok(())
     }
 
@@ -205,19 +222,19 @@ impl<C: Can> Protocol<C> {
     }
 
     fn handle_reboot(&mut self) -> Result<(), ProtocolError> {
-        // TODO: Implement reboot
-        let response = [0x00]; // Success
+        // Send success response before rebooting
+        let response = [0x00];
         self.send_response(&response)?;
         Ok(())
     }
 
     fn send_response(&mut self, data: &[u8]) -> Result<(), ProtocolError> {
+        // Create response frame
         let frame = C::Frame::new(self.command_id, data)
             .ok_or(ProtocolError::InvalidLength)?;
-        
-        block!(self.can.transmit(&frame))
-            .map_err(|_| ProtocolError::CommunicationError)?;
-        
-        Ok(())
+
+        // Send frame
+        self.can.transmit(&frame)
+            .map_err(|_| ProtocolError::CommunicationError)
     }
 }

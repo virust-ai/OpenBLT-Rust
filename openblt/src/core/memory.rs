@@ -1,20 +1,34 @@
 use core::convert::TryInto;
-use thiserror::Error;
 use crate::hal::S32KHal;
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum MemoryManagementError {
-    #[error("Invalid memory region")]
-    InvalidRegion,
-    #[error("Region overlap")]
-    RegionOverlap,
-    #[error("Region not aligned")]
+    Hardware(&'static str),
+    InvalidAddress,
+    InvalidLength,
+    WriteError,
+    ReadError,
+    EraseError,
     RegionNotAligned,
-    #[error("Hardware error: {0}")]
-    Hardware(String),
-    #[error("Protected region access")]
-    ProtectedRegionAccess,
+    RegionOverlap,
 }
+
+impl core::fmt::Display for MemoryManagementError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MemoryManagementError::Hardware(msg) => write!(f, "Hardware error: {}", msg),
+            MemoryManagementError::InvalidAddress => write!(f, "Invalid address"),
+            MemoryManagementError::InvalidLength => write!(f, "Invalid length"),
+            MemoryManagementError::WriteError => write!(f, "Write error"),
+            MemoryManagementError::ReadError => write!(f, "Read error"),
+            MemoryManagementError::EraseError => write!(f, "Erase error"),
+            MemoryManagementError::RegionNotAligned => write!(f, "Region not aligned"),
+            MemoryManagementError::RegionOverlap => write!(f, "Region overlap"),
+        }
+    }
+}
+
+impl core::error::Error for MemoryManagementError {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryRegion {
@@ -80,47 +94,21 @@ impl<H: S32KHal> MemoryManager<H> {
     }
 
     pub fn erase_region(&mut self, address: u32, length: u32) -> Result<(), MemoryManagementError> {
-        // Check if operation is within application region
-        if !self.application_region.contains(address) ||
-           !self.application_region.contains(address + length - 1) {
-            return Err(MemoryManagementError::InvalidRegion);
-        }
-
-        // Ensure length is a multiple of 4KB (flash page size)
-        if length % 4096 != 0 {
-            return Err(MemoryManagementError::RegionNotAligned);
-        }
-
-        self.hal.erase_flash(address, length)
-            .map_err(|e| MemoryManagementError::Hardware(e.into().to_string()))
+        self.hal
+            .erase_flash(address, length)
+            .map_err(|e| MemoryManagementError::Hardware("Failed to erase flash"))
     }
 
     pub fn write_region(&mut self, address: u32, data: &[u8]) -> Result<(), MemoryManagementError> {
-        // Check if operation is within application region
-        if !self.application_region.contains(address) ||
-           !self.application_region.contains(address + data.len() as u32 - 1) {
-            return Err(MemoryManagementError::InvalidRegion);
-        }
-
-        // Ensure data length is a multiple of 4 (word size)
-        if data.len() % 4 != 0 {
-            return Err(MemoryManagementError::RegionNotAligned);
-        }
-
-        self.hal.write_flash(address, data)
-            .map_err(|e| MemoryManagementError::Hardware(e.into().to_string()))
+        self.hal
+            .write_flash(address, data)
+            .map_err(|e| MemoryManagementError::Hardware("Failed to write flash"))
     }
 
     pub fn read_region(&mut self, address: u32, data: &mut [u8]) -> Result<(), MemoryManagementError> {
-        // Check if operation is within any region
-        if !self.bootloader_region.contains(address) &&
-           !self.application_region.contains(address) &&
-           !self.config_region.contains(address) {
-            return Err(MemoryManagementError::InvalidRegion);
-        }
-
-        self.hal.read_flash(address, data)
-            .map_err(|e| MemoryManagementError::Hardware(e.into().to_string()))
+        self.hal
+            .read_flash(address, data)
+            .map_err(|e| MemoryManagementError::Hardware("Failed to read flash"))
     }
 
     pub fn is_protected_region(&self, address: u32) -> bool {

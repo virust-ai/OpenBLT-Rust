@@ -13,5 +13,4 @@ embedded-can = { workspace = true }
 nb = { workspace = true }
 bitflags = { workspace = true }
 volatile-register = "0.2.0"
-vcell = "0.1.3" 
-openblt = { path = "../openblt" }
+vcell = "0.1.3"
