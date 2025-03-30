@@ -19,6 +19,8 @@ pub enum BootloaderError {
     ProgrammingFailed,
     #[error("Memory error: {0}")]
     Memory(#[from] MemoryManagementError),
+    #[error("Invalid entry condition")]
+    InvalidEntryCondition,
 }
 
 pub struct Bootloader<H: S32KHal> {
@@ -42,13 +44,17 @@ impl<H: S32KHal> Bootloader<H> {
     }
 
     pub fn run(&mut self) -> Result<(), BootloaderError> {
+        // Check entry conditions
+        if self.should_enter_programming_mode() {
+            self.enter_programming_mode()?;
+        } else {
+            // Jump to application if valid
+            self.jump_to_application()?;
+            return Ok(());
+        }
+
         // Main bootloader loop
         loop {
-            // Check for programming mode entry conditions
-            if self.should_enter_programming_mode() {
-                self.enter_programming_mode()?;
-            }
-
             // Handle incoming CAN messages
             self.handle_can_messages()?;
 
@@ -65,11 +71,62 @@ impl<H: S32KHal> Bootloader<H> {
     }
 
     fn should_enter_programming_mode(&self) -> bool {
-        // TODO: Implement programming mode entry conditions
-        // 1. Check for programming request signal
-        // 2. Verify system state
-        // 3. Check for valid firmware
-        false
+        // Basic entry conditions:
+        // 1. Check if programming request pin is active
+        // 2. Check if application is valid
+        // 3. Check if programming mode is requested via CAN
+
+        // TODO: Implement actual pin check
+        let programming_pin_active = false;
+
+        // Check if application is valid
+        let application_valid = self.is_application_valid();
+
+        // Check if programming mode is requested via CAN
+        let programming_requested = self.protocol.is_programming_requested();
+
+        programming_pin_active || !application_valid || programming_requested
+    }
+
+    fn is_application_valid(&self) -> bool {
+        // Basic application validation:
+        // 1. Check if application region is not empty (not all 0xFF)
+        // 2. Check if application has valid entry point
+        // 3. Check if application checksum is valid
+
+        // Read first word of application
+        let mut data = [0u8; 4];
+        if let Ok(()) = self.memory.read_region(
+            self.memory.get_application_start(),
+            &mut data
+        ) {
+            let first_word = u32::from_le_bytes(data);
+            
+            // Check if not erased (0xFFFFFFFF)
+            if first_word == 0xFFFFFFFF {
+                return false;
+            }
+
+            // TODO: Add more validation (entry point, checksum)
+            true
+        } else {
+            false
+        }
+    }
+
+    fn jump_to_application(&self) -> Result<(), BootloaderError> {
+        // Get application entry point
+        let mut data = [0u8; 4];
+        self.memory.read_region(
+            self.memory.get_application_start(),
+            &mut data
+        )?;
+
+        let entry_point = u32::from_le_bytes(data);
+
+        // TODO: Implement actual jump to application
+        // This will be implemented in the HAL
+        Ok(())
     }
 
     fn enter_programming_mode(&mut self) -> Result<(), BootloaderError> {
