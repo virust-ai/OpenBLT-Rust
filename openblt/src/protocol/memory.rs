@@ -1,5 +1,6 @@
 use core::convert::TryInto;
 use thiserror::Error;
+use s32k148_hal::flash::{Flash, FlashError};
 
 #[derive(Error, Debug)]
 pub enum MemoryError {
@@ -13,83 +14,38 @@ pub enum MemoryError {
     ReadError,
     #[error("Erase error")]
     EraseError,
+    #[error("Flash error: {0}")]
+    FlashError(#[from] FlashError),
 }
 
 pub struct Memory {
-    start_address: u32,
-    size: u32,
+    flash: Flash,
 }
 
 impl Memory {
     pub fn new(start_address: u32, size: u32) -> Self {
         Self {
-            start_address,
-            size,
+            flash: Flash::new(),
         }
     }
 
     pub fn erase(&mut self, address: u32, length: u32) -> Result<(), MemoryError> {
-        // Validate address and length
-        if address < self.start_address || address + length > self.start_address + self.size {
-            return Err(MemoryError::InvalidAddress);
-        }
-
-        // Ensure length is a multiple of flash page size (4KB)
-        if length % 4096 != 0 {
-            return Err(MemoryError::InvalidLength);
-        }
-
-        // TODO: Implement actual flash erase
-        // This will need to be implemented using the S32K148's flash controller
-        // For now, we'll just return success
-        Ok(())
+        self.flash.erase(address, length)
+            .map_err(MemoryError::FlashError)
     }
 
     pub fn write(&mut self, address: u32, data: &[u8]) -> Result<(), MemoryError> {
-        // Validate address and length
-        if address < self.start_address || address + data.len() as u32 > self.start_address + self.size {
-            return Err(MemoryError::InvalidAddress);
-        }
-
-        // Ensure data length is a multiple of 4 (word size)
-        if data.len() % 4 != 0 {
-            return Err(MemoryError::InvalidLength);
-        }
-
-        // TODO: Implement actual flash write
-        // This will need to be implemented using the S32K148's flash controller
-        // For now, we'll just return success
-        Ok(())
+        self.flash.write(address, data)
+            .map_err(MemoryError::FlashError)
     }
 
     pub fn read(&mut self, address: u32, length: u32) -> Result<Vec<u8>, MemoryError> {
-        // Validate address and length
-        if address < self.start_address || address + length > self.start_address + self.size {
-            return Err(MemoryError::InvalidAddress);
-        }
-
-        // TODO: Implement actual flash read
-        // This will need to be implemented using the S32K148's flash controller
-        // For now, we'll return a zero-filled buffer
-        Ok(vec![0; length as usize])
+        self.flash.read(address, length)
+            .map_err(MemoryError::FlashError)
     }
 
     pub fn calculate_checksum(&mut self, address: u32, length: u32) -> Result<u32, MemoryError> {
-        // Validate address and length
-        if address < self.start_address || address + length > self.start_address + self.size {
-            return Err(MemoryError::InvalidAddress);
-        }
-
-        // Read memory and calculate checksum
-        let data = self.read(address, length)?;
-        
-        // Simple XOR checksum
-        let mut checksum = 0u32;
-        for chunk in data.chunks(4) {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap());
-            checksum ^= word;
-        }
-        
-        Ok(checksum)
+        self.flash.calculate_checksum(address, length)
+            .map_err(MemoryError::FlashError)
     }
 } 
