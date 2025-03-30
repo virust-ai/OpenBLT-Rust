@@ -363,7 +363,6 @@ dependencies = [
  "nb 1.1.0",
  "s32k118-hal",
  "s32k148-hal",
- "thiserror",
 ]
 
 [[package]]
@@ -510,7 +509,6 @@ dependencies = [
  "cortex-m-rt",
  "embedded-can",
  "nb 1.1.0",
- "thiserror",
  "vcell",
  "volatile-register",
 ]

@@ -1,6 +1,8 @@
 use bitflags::bitflags;
 use vcell::VolatileCell;
 use volatile_register::{RO, RW, WO};
+use core::fmt;
+use core::array;
 
 // CAN Peripheral Base Addresses
 pub const CAN0_BASE: u32 = 0x4002_4000;
@@ -10,43 +12,105 @@ pub const CAN1_BASE: u32 = 0x4002_5000;
 #[repr(C)]
 pub struct CanRegisters {
     // Module Configuration Register
-    pub mcr: RW<u32>,
+    pub mcr: VolatileCell<u32>,
     // Control Register
-    pub ctrl1: RW<u32>,
+    pub ctrl1: VolatileCell<u32>,
     // Status Register
-    pub stat1: RO<u32>,
+    pub stat1: VolatileCell<u32>,
     // Error Counter Register
-    pub err_cnt: RO<u32>,
+    pub err_cnt: VolatileCell<u32>,
     // Bit Timing Register
-    pub btr: RW<u32>,
+    pub btr: VolatileCell<u32>,
     // Rx FIFO Global Mask Register
-    pub rxmgmask: RW<u32>,
+    pub rxmgmask: VolatileCell<u32>,
     // Rx FIFO Individual Mask Registers
-    pub rx14mask: RW<u32>,
-    pub rx15mask: RW<u32>,
+    pub rx14mask: VolatileCell<u32>,
+    pub rx15mask: VolatileCell<u32>,
     // Rx FIFO Information Register
-    pub rx_fifo_info: RO<u32>,
+    pub rx_fifo_info: VolatileCell<u32>,
     // Rx FIFO Data Register
-    pub rx_fifo_data: RO<u32>,
+    pub rx_fifo_data: VolatileCell<u32>,
     // Tx Buffer Information Register
-    pub tx_buffer_info: RO<u32>,
+    pub tx_buffer_info: VolatileCell<u32>,
     // Tx Buffer Data Register
-    pub tx_buffer_data: WO<u32>,
+    pub tx_buffer_data: VolatileCell<u32>,
     // Message Buffer Registers (16 buffers)
     pub mb: [MessageBuffer; 16],
+}
+
+impl core::fmt::Debug for CanRegisters {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CanRegisters")
+            .field("mcr", &self.mcr.get())
+            .field("ctrl1", &self.ctrl1.get())
+            .field("stat1", &self.stat1.get())
+            .field("err_cnt", &self.err_cnt.get())
+            .field("btr", &self.btr.get())
+            .field("rxmgmask", &self.rxmgmask.get())
+            .field("rx14mask", &self.rx14mask.get())
+            .field("rx15mask", &self.rx15mask.get())
+            .field("rx_fifo_info", &self.rx_fifo_info.get())
+            .field("rx_fifo_data", &self.rx_fifo_data.get())
+            .field("tx_buffer_info", &self.tx_buffer_info.get())
+            .field("tx_buffer_data", &self.tx_buffer_data.get())
+            .field("mb", &self.mb)
+            .finish()
+    }
+}
+
+impl Clone for CanRegisters {
+    fn clone(&self) -> Self {
+        Self {
+            mcr: VolatileCell::new(self.mcr.get()),
+            ctrl1: VolatileCell::new(self.ctrl1.get()),
+            stat1: VolatileCell::new(self.stat1.get()),
+            err_cnt: VolatileCell::new(self.err_cnt.get()),
+            btr: VolatileCell::new(self.btr.get()),
+            rxmgmask: VolatileCell::new(self.rxmgmask.get()),
+            rx14mask: VolatileCell::new(self.rx14mask.get()),
+            rx15mask: VolatileCell::new(self.rx15mask.get()),
+            rx_fifo_info: VolatileCell::new(self.rx_fifo_info.get()),
+            rx_fifo_data: VolatileCell::new(self.rx_fifo_data.get()),
+            tx_buffer_info: VolatileCell::new(self.tx_buffer_info.get()),
+            tx_buffer_data: VolatileCell::new(self.tx_buffer_data.get()),
+            mb: self.mb.clone(),
+        }
+    }
 }
 
 // Message Buffer Structure
 #[repr(C)]
 pub struct MessageBuffer {
     // Control and Status
-    pub cs: RW<u32>,
+    pub cs: VolatileCell<u32>,
     // ID
-    pub id: RW<u32>,
+    pub id: VolatileCell<u32>,
     // Word 0
-    pub word0: RW<u32>,
+    pub word0: VolatileCell<u32>,
     // Word 1
-    pub word1: RW<u32>,
+    pub word1: VolatileCell<u32>,
+}
+
+impl core::fmt::Debug for MessageBuffer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MessageBuffer")
+            .field("cs", &self.cs.get())
+            .field("id", &self.id.get())
+            .field("word0", &self.word0.get())
+            .field("word1", &self.word1.get())
+            .finish()
+    }
+}
+
+impl Clone for MessageBuffer {
+    fn clone(&self) -> Self {
+        Self {
+            cs: VolatileCell::new(self.cs.get()),
+            id: VolatileCell::new(self.id.get()),
+            word0: VolatileCell::new(self.word0.get()),
+            word1: VolatileCell::new(self.word1.get()),
+        }
+    }
 }
 
 // CAN Control Register 1 Bit Definitions
@@ -150,5 +214,74 @@ impl CanError {
         } else {
             Some(CanError::Unknown)
         }
+    }
+}
+
+impl Default for CanRegisters {
+    fn default() -> Self {
+        Self {
+            mcr: VolatileCell::new(0),
+            ctrl1: VolatileCell::new(0),
+            stat1: VolatileCell::new(0),
+            err_cnt: VolatileCell::new(0),
+            btr: VolatileCell::new(0),
+            rxmgmask: VolatileCell::new(0),
+            rx14mask: VolatileCell::new(0),
+            rx15mask: VolatileCell::new(0),
+            rx_fifo_info: VolatileCell::new(0),
+            rx_fifo_data: VolatileCell::new(0),
+            tx_buffer_info: VolatileCell::new(0),
+            tx_buffer_data: VolatileCell::new(0),
+            mb: array::from_fn(|_| MessageBuffer::default()),
+        }
+    }
+}
+
+impl CanRegisters {
+    pub fn read(&self) -> u32 {
+        0 // TODO: Implement actual register read
+    }
+
+    pub fn write(&mut self, value: u32) {
+        // TODO: Implement actual register write
+    }
+
+    pub fn modify<F>(&mut self, f: F)
+    where
+        F: FnOnce(u32) -> u32,
+    {
+        let value = self.read();
+        let new_value = f(value);
+        self.write(new_value);
+    }
+}
+
+impl Default for MessageBuffer {
+    fn default() -> Self {
+        Self {
+            cs: VolatileCell::new(0),
+            id: VolatileCell::new(0),
+            word0: VolatileCell::new(0),
+            word1: VolatileCell::new(0),
+        }
+    }
+}
+
+impl MessageBuffer {
+    pub fn read(&self) -> u32 {
+        0 // TODO: Implement actual register read
+    }
+
+    pub fn write(&mut self, value: u32) {
+        // TODO: Implement actual register write
+    }
+
+    pub fn modify<F>(&mut self, f: F)
+    where
+        F: FnOnce(u32) -> u32,
+    {
+        let value = self.read();
+        let new_value = f(value);
+        self.write(new_value);
     }
 }
