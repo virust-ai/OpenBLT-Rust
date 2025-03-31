@@ -49,4 +49,20 @@ impl Board {
     pub fn is_programming_pin_active(&self) -> bool {
         self.hal.is_programming_pin_active()
     }
+
+    pub fn check_programming_request(&mut self) -> bool {
+        // Check if programming pin is active
+        if self.is_programming_pin_active() {
+            return true;
+        }
+
+        // Check for CAN programming request (ID 0x7E0)
+        if let Ok((id, _, _)) = self.hal.get_can_mut().receive_frame() {
+            if id == 0x7E0 {
+                return true;
+            }
+        }
+
+        false
+    }
 } 

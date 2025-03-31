@@ -1,7 +1,6 @@
 [target.thumbv7em-none-eabihf]
 rustflags = [
-    "-C", "link-arg=--script=openblt/boards/s32k148/linker/S32K148_256_flash.ld",
-    "-C", "link-arg=--gc-sections",
+    "-C", "link-arg=--script=openblt/boards/s32k148/linker/S32K148_256_flash.ld"
 ]
 
 [build]

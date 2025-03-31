@@ -5,10 +5,20 @@ use core::marker::PhantomData;
 pub mod can;
 pub mod flash;
 pub mod hal;
+pub mod uart;
+pub mod clock;
+pub mod gpio;
+pub mod peripheral;
+pub mod reg;
 
 pub use can::{CanDevice, CanError, CanRegisters};
 pub use flash::{Flash, Error as FlashError};
 pub use hal::S32KHal;
+pub use uart::{debug_println, init_debug_uart};
+pub use clock::Clock;
+pub use gpio::{Pin, Port};
+pub use peripheral::{Peripheral, PeripheralRef};
+pub use reg::Register;
 
 pub struct S32K148 {
     can: CanDevice,
@@ -37,6 +47,10 @@ impl S32KHal for S32K148 {
         let registers = unsafe { &mut *(0x4002_4000 as *mut CanRegisters) };
         let can = CanDevice::new(registers);
         let flash = Flash::new();
+        
+        // Initialize debug UART
+        init_debug_uart();
+        
         Ok(Self::new(can, flash))
     }
 
