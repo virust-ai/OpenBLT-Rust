@@ -1,4 +1,5 @@
 use cortex_m::asm;
+use cortex_m_rt::{exception, ExceptionFrame};
 
 // Default handler macro to reduce code duplication
 macro_rules! default_handler {
@@ -11,6 +12,22 @@ macro_rules! default_handler {
             }
         }
     };
+}
+
+// Default handler for unhandled interrupts
+#[exception]
+unsafe fn DefaultHandler(_irqn: i16) -> ! {
+    loop {
+        asm::nop();
+    }
+}
+
+// Hard fault handler
+#[exception]
+unsafe fn HardFault(_ef: &ExceptionFrame) -> ! {
+    loop {
+        asm::nop();
+    }
 }
 
 // DMA handlers
@@ -170,5 +187,4 @@ default_handler!(Reserved97_IRQHandler);
 default_handler!(Reserved98_IRQHandler);
 default_handler!(Reserved99_IRQHandler);
 default_handler!(Reserved100_IRQHandler);
-default_handler!(Reserved101_IRQHandler);
-default_handler!(DefaultISR); 
+default_handler!(Reserved101_IRQHandler); 
