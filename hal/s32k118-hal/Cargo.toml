@@ -1,0 +1,16 @@
+[package]
+name = "s32k118-hal"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "Hardware Abstraction Layer for NXP S32K118"
+license = "MIT"
+
+[dependencies]
+embedded-can = { workspace = true }
+bitflags = { workspace = true }
+nb = { workspace = true }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+log = { workspace = true }
+volatile-register = "0.2.2" 

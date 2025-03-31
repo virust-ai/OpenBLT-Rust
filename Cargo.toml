@@ -1,26 +1,51 @@
 [workspace]
 members = [
     "openblt",
-    "s32k118-hal",
-    "s32k148-hal"
+    "hal/s32k148-hal",
+    "hal/s32k118-hal",
 ]
 
 [workspace.dependencies]
-embedded-can = "0.4.0"
-bitflags = "2.4.1"
-nb = "1.0.0"
+embedded-can = "0.4.1"
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
-thiserror = { version = "1.0.56", default-features = false }
 log = "0.4.20"
+bitflags = "2.4.1"
+nb = "1.1.0"
+thiserror = "1.0.50"
+vcell = "0.1.3"
+volatile-register = "0.2.2"
+
+[workspace.package]
+name = "openblt"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "OpenBLT bootloader implementation in Rust"
+license = "MIT"
 
 [package]
 name = "openblt-rust"
 version = "0.1.0"
 edition = "2021"
 authors = ["Your Name <your.email@example.com>"]
-description = "OpenBLT bootloader implementation in Rust for NXP S32K series"
-license = "GPL-3.0"
+description = "Rust implementation of OpenBLT bootloader"
+license = "MIT"
+
+[dependencies]
+openblt = { path = "openblt" }
+s32k148-hal = { path = "hal/s32k148-hal" }
+s32k148-board = { path = "openblt/boards/s32k148" }
+embedded-can = { workspace = true }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+log = { workspace = true }
+alloc-cortex-m = "0.4.4"
 
 [dev-dependencies]
 criterion = "0.5.1"
+
+[profile.release]
+opt-level = 3
+debug = true
+lto = true
