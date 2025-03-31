@@ -1,0 +1,7 @@
+[target.'cfg(target_os = "none")']
+runner = "probe-run --chip S32K148"
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Wl,--gc-sections",
+    "-C", "link-arg=-Wl,--no-warn-mismatch"
+] 
