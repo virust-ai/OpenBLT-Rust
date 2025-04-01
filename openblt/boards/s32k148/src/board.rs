@@ -60,7 +60,24 @@ impl Board {
         self.hal.read_flash(address, data)
     }
 
-    pub fn jump_to_application(&self, entry_point: u32) -> Result<(), FlashError> {
-        self.hal.jump_to_application(entry_point)
+    pub fn validate_application(&self) -> bool {
+        // TODO: Implement proper application validation
+        // This should:
+        // 1. Check application signature
+        // 2. Verify checksum
+        // 3. Validate application boundaries
+        // 4. Check for valid entry point
+        true // Placeholder
+    }
+
+    pub fn jump_to_application(&self) -> ! {
+        // TODO: Implement proper application jump
+        // This should:
+        // 1. Disable interrupts
+        // 2. Set up stack pointer
+        // 3. Set up program counter
+        // 4. Enable interrupts
+        // 5. Jump to application
+        cortex_m::asm::unreachable();
     }
 } 
